@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests and vet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: foundation
+          POSTGRES_PASSWORD: foundation-test
+          POSTGRES_DB: foundation
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U foundation -d foundation"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7.4.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli --no-auth-warning -a foundation-test ping 2>/dev/null | grep -qx PONG"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      CGO_ENABLED: '1'
+      GO_FOUNDATION_POSTGRES_TEST_DSN: postgres://foundation:foundation-test@127.0.0.1:5432/foundation?sslmode=disable
+      GO_FOUNDATION_REDIS_TEST_ADDRESS: 127.0.0.1:6379
+      GO_FOUNDATION_REDIS_TEST_PASSWORD: foundation-test
+
+    steps:
+      - name: Enable Redis test authentication
+        run: docker exec "${{ job.services.redis.id }}" redis-cli CONFIG SET requirepass foundation-test
+
+      - name: Check out code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with race detection and database integrations
+        run: go test -race -count=1 -timeout=10m ./...

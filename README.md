@@ -3212,6 +3212,19 @@ or configure backups, authentication, or clustering. See the official
 
 ## Development
 
+[GitHub Actions CI](.github/workflows/ci.yml) runs on pull requests, pushes to
+`main`, and manual dispatches. It uses the Go version declared in `go.mod`,
+runs `go vet ./...`, and runs `go test -race -count=1 -timeout=10m ./...` against
+fresh PostgreSQL 18 and Redis 7.4 service containers. Health checks wait for both
+services before the job starts. The PostgreSQL test user can create the isolated
+databases used by the integration tests. The database connection environment
+variables are supplied so those tests run in CI rather than being skipped.
+
+The containers are disposable test infrastructure; their credentials are not
+production secrets. CI enables Redis password authentication before the tests
+so the invalid-credential cases exercise a protected server. NATS servers, HTTP services,
+and telemetry collectors are started locally by the Go tests themselves.
+
 Use the Go version declared in `go.mod`:
 
 ```sh
