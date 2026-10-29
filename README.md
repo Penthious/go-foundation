@@ -3225,6 +3225,39 @@ production secrets. CI enables Redis password authentication before the tests
 so the invalid-credential cases exercise a protected server. NATS servers, HTTP services,
 and telemetry collectors are started locally by the Go tests themselves.
 
+For the full local integration suite, start Docker and run from the repository
+root:
+
+```sh
+go -C testsupport/integration run .
+```
+
+The runner uses Testcontainers to start PostgreSQL 18 and password-protected
+Redis 7.4 on temporary ports, waits for readiness, then runs
+`go test -race -count=1 -timeout=10m ./...` in the SDK module. It removes the
+containers and their volumes afterward, including when tests fail or startup
+partially fails. Docker startup failures fail the command rather than skipping
+integration tests. The first run may download container images.
+
+Existing `GO_FOUNDATION_POSTGRES_TEST_DSN`, `GO_FOUNDATION_REDIS_TEST_ADDRESS`,
+and `GO_FOUNDATION_REDIS_TEST_PASSWORD` settings are preserved. The runner starts
+only a database whose connection setting is missing or empty; it never stops
+externally supplied databases. GitHub Actions uses the same runner with both
+connections supplied, so it reuses CI service containers without starting more.
+Use dedicated test databases; the PostgreSQL user needs CREATEDB permission.
+
+To select packages or tests, pass ordinary `go test` arguments:
+
+```sh
+go -C testsupport/integration run . ./inbox ./outbox
+go -C testsupport/integration run . -run TestClient ./cache
+```
+
+Testcontainers is isolated in the `testsupport/integration` module and does not
+add dependencies to the SDK module. CI also runs that module's own tests and
+`go vet`. Plain `go test ./...` retains its existing behavior: database integration
+cases skip when their connection variables are unset.
+
 Use the Go version declared in `go.mod`:
 
 ```sh
