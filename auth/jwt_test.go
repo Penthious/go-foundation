@@ -308,6 +308,71 @@ func TestJWT_JWKSBoundaries(t *testing.T) {
 	}
 }
 
+func TestJWT_AllowMissingTokenType(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "legacy", Use: "sig", Algorithm: "RS256"}}}); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	for _, tc := range []struct {
+		name   string
+		allow  bool
+		typ    string
+		change func(map[string]any)
+		tamper bool
+		want   int
+	}{
+		{name: "strict default rejects missing type", want: http.StatusUnauthorized},
+		{name: "opt in accepts missing type", allow: true, want: http.StatusNoContent},
+		{name: "matching type still accepted", allow: true, typ: "JWT", want: http.StatusNoContent},
+		{name: "wrong type rejected", allow: true, typ: "at+jwt", want: http.StatusUnauthorized},
+		{name: "blank type rejected", allow: true, typ: " ", want: http.StatusUnauthorized},
+		{name: "bad signature rejected", allow: true, tamper: true, want: http.StatusUnauthorized},
+		{name: "wrong issuer rejected", allow: true, change: func(c map[string]any) { c["iss"] = "https://other.example" }, want: http.StatusUnauthorized},
+		{name: "wrong audience rejected", allow: true, change: func(c map[string]any) { c["aud"] = "other-application" }, want: http.StatusUnauthorized},
+		{name: "expired rejected", allow: true, change: func(c map[string]any) { c["exp"] = time.Now().Add(-time.Hour).Unix() }, want: http.StatusUnauthorized},
+		{name: "missing expiry rejected", allow: true, change: func(c map[string]any) { delete(c, "exp") }, want: http.StatusUnauthorized},
+		{name: "blank subject rejected", allow: true, change: func(c map[string]any) { c["sub"] = "" }, want: http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gate, err := New(Config{JWT: &JWTConfig{Issuer: server.URL, Audience: "legacy-application", JWKSURL: server.URL,
+				HTTPClient: server.Client(), TokenType: "JWT", AllowMissingTokenType: tc.allow}})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			claims := map[string]any{"iss": server.URL, "aud": "legacy-application", "sub": "user", "exp": time.Now().Add(time.Hour).Unix()}
+			if tc.change != nil {
+				tc.change(claims)
+			}
+
+			token := signJWT(t, key, jose.RS256, "legacy", tc.typ, claims)
+			if tc.tamper {
+				token = token[:strings.LastIndex(token, ".")+1] + "invalid"
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "/rules", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			response := httptest.NewRecorder()
+
+			gate.Protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})).ServeHTTP(response, req)
+
+			if response.Code != tc.want {
+				t.Fatalf("got %d, want %d", response.Code, tc.want)
+			}
+		})
+	}
+}
+
 func signJWT(t *testing.T, key any, alg jose.SignatureAlgorithm, id, typ string, claims map[string]any) string {
 	t.Helper()
 

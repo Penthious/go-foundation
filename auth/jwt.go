@@ -26,6 +26,10 @@ type JWTConfig struct {
 	// providers using legacy access tokens, with a dedicated API audience that is
 	// never used for ID tokens. The protected typ header must match exactly.
 	TokenType string
+	// AllowMissingTokenType accepts an absent typ header from trusted legacy
+	// providers. A present header must still match TokenType. Use only with a
+	// dedicated access-token audience that is never used for ID tokens.
+	AllowMissingTokenType bool
 	// Timeout defaults to 5s, bounding verification and each JWKS HTTP operation.
 	Timeout time.Duration
 	// HTTPClient is copied. Its transport is borrowed; configure it before New
@@ -37,11 +41,12 @@ type JWTConfig struct {
 }
 
 type jwtVerifier struct {
-	verifier   *oidc.IDTokenVerifier
-	issuer     string
-	tokenType  string
-	algorithms []jose.SignatureAlgorithm
-	timeout    time.Duration
+	verifier              *oidc.IDTokenVerifier
+	issuer                string
+	tokenType             string
+	allowMissingTokenType bool
+	algorithms            []jose.SignatureAlgorithm
+	timeout               time.Duration
 }
 
 func newJWTVerifier(cfg JWTConfig) (*jwtVerifier, error) {
@@ -103,7 +108,8 @@ func newJWTVerifier(cfg JWTConfig) (*jwtVerifier, error) {
 
 	return &jwtVerifier{
 		verifier: verifier, issuer: cfg.Issuer, tokenType: cfg.TokenType,
-		algorithms: algorithms, timeout: cfg.Timeout,
+		allowMissingTokenType: cfg.AllowMissingTokenType,
+		algorithms:            algorithms, timeout: cfg.Timeout,
 	}, nil
 }
 
@@ -113,7 +119,12 @@ func (v *jwtVerifier) verify(ctx context.Context, raw string) (Principal, bool) 
 	}
 
 	jws, err := jose.ParseSignedCompact(raw, v.algorithms)
-	if err != nil || len(jws.Signatures) != 1 || jws.Signatures[0].Protected.ExtraHeaders[jose.HeaderType] != v.tokenType {
+	if err != nil || len(jws.Signatures) != 1 {
+		return Principal{}, false
+	}
+
+	tokenType, present := jws.Signatures[0].Protected.ExtraHeaders[jose.HeaderType]
+	if (!present && !v.allowMissingTokenType) || (present && tokenType != v.tokenType) {
 		return Principal{}, false
 	}
 

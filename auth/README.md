@@ -96,6 +96,15 @@ or introspect opaque tokens. Other provider-specific token-purpose checks remain
 service-owned. Scopes come from OAuth's space-separated `scope` string and/or
 the `scp` string array; role/group claims do not automatically grant scopes.
 
+Some trusted legacy providers, including Cloudflare Access, issue signed access
+assertions without a protected `typ` header. Set `AllowMissingTokenType: true`
+explicitly for that provider and use a dedicated application audience that is
+never used for ID tokens. The default remains false. This accepts only an absent
+header; a present value (including an empty or mismatched value) must still
+match `TokenType`. Signature, algorithm, issuer, audience, expiration, subject,
+time and scope checks remain enforced. The service must retain any additional
+provider-specific token-purpose checks.
+
 JWKS keys are fetched lazily and cached by a shared verifier. A missing key or
 failed signature triggers a refresh, limited to one HTTP fetch per second per
 authenticator, with concurrent fetches coalesced. During that cooldown a new key
